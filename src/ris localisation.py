@@ -1,87 +1,140 @@
 import numpy as np
 from scipy.constants import c
 
-
 class RISLocalization:
-    def __init__(self, N, fc, U, V, N0, P):
-        self.N = N  # Number of RIS elements
-        self.fc = fc  # Carrier frequency
-        self.lambda_c = c / fc  # Wavelength
-        self.U = U  # Number of transmissions
-        self.V = V  # Number of subcarriers
-        self.N0 = N0  # Noise variance
-        self.P = P  # Transmission power
 
-    def compute_steering_vector(self, theta, wavelength=None):
+    def __init__(self, N, fc, U, V, N0, P, d=None):
+        """
+        N : int, Number of RIS elements
+        fc : float, Carrier frequency (Hz)
+        U : int, Number of transmissions
+        V : int, Number of subcarriers
+        N0 : float, Noise variance (linear scale)
+        P : float, Transmit power (Watts)
+        d : float, RIS element spacing (default = λ/2)
+        """
+        self.N = int(N)
+        self.fc = float(fc)
+        self.lambda_c = c / self.fc  # Wavelength
+        self.U = int(U)
+        self.V = int(V)
+        self.N0 = float(N0)
+        self.P = float(P)
+        self.d = self.lambda_c / 2 if d is None else float(d)
+        
+    # Steering Vector Computations
+
+    def _element_indices(self):
+        return np.arange(self.N) - (self.N - 1) / 2
+
+    def steering_vector(self, theta, wavelength=None):
+        """Compute array steering vector for a given AoA."""
         if wavelength is None:
             wavelength = self.lambda_c
-        n = np.arange(-(self.N - 1) / 2, (self.N) / 2)
-        return np.exp(-1j * np.pi * n * np.sin(theta))
+        n = self._element_indices()
+        phase_shift = -1j * 2 * np.pi * self.d * n * np.sin(theta) / wavelength
+        return np.exp(phase_shift)
 
-    def compute_steering_vector_derivative(self, theta):
-        n = np.arange(-(self.N - 1) / 2, (self.N) / 2)
-        return -1j * np.pi * n * np.cos(theta) * np.exp(-1j * np.pi * n * np.sin(theta))
+    def steering_vector_derivative(self, theta, wavelength=None):
+        """Derivative of steering vector w.r.t theta."""
+        if wavelength is None:
+            wavelength = self.lambda_c
+        n = self._element_indices()
+        a = self.steering_vector(theta, wavelength)
+        factor = -1j * 2 * np.pi * self.d * n * np.cos(theta) / wavelength
+        return factor * a
 
-    def compute_delay(self, tau, v, delta_f):
+    # Channel Modeling
+
+    def compute_delay(self, tau, v, delta_f=0.0):
+      
         return np.exp(-1j * 2 * np.pi * (self.fc + v * delta_f) * tau)
 
-    def compute_channel_gain(self, p, pb):
-        norm_p = max(np.linalg.norm(p), 1e-10)  # Avoid division by zero
-        norm_pb = max(np.linalg.norm(pb), 1e-10)
-        return (self.lambda_c**2 / (4 * np.pi)**2) / (norm_p * norm_pb)
+    def two_hop_channel_gain(self, ue_pos, bs_pos, ris_pos=None):
+        
+        if ris_pos is None:
+            ris_pos = np.zeros_like(ue_pos)
 
-    def regularize_matrix(self, matrix, epsilon=1e-10):
-        """Add small values to diagonal for numerical stability"""
-        return matrix + epsilon * np.eye(matrix.shape[0])
+        dist_bs_to_ris = max(np.linalg.norm(bs_pos - ris_pos), 1e-10)
+        dist_ris_to_ue = max(np.linalg.norm(ue_pos - ris_pos), 1e-10)
 
-    def compute_fim_mm(self, alpha, theta, tau, phi):
-        fim = np.zeros((3, 3), dtype=complex)
-        for u in range(self.U):
-            for v in range(self.V):
-                ap = self.compute_steering_vector(theta)
-                apb = self.compute_steering_vector(theta)
-                dap = self.compute_steering_vector_derivative(theta)
+        g_bs_ris = (self.lambda_c / (4 * np.pi * dist_bs_to_ris)) ** 2
+        g_ris_ue = (self.lambda_c / (4 * np.pi * dist_ris_to_ue)) ** 2
 
-                d_real = apb.T @ np.diag(phi) @ ap * self.compute_delay(tau, v, 0)
-                d_imag = 1j * d_real
-                d_theta = alpha * apb.T @ np.diag(phi) @ dap * self.compute_delay(tau, v, 0)
+        return g_bs_ris * g_ris_ue
 
-                derivatives = np.array([d_real, d_imag, d_theta])
-                fim += 2 / self.N0 * np.real(np.outer(derivatives, derivatives.conj()))
-        return self.regularize_matrix(fim)
+    def regularize(self, matrix, eps=1e-12):
+     
+        return matrix + eps * np.eye(matrix.shape[0])
 
-    def compute_fim_tm(self, alpha, theta, tau, phi, p, pb):
-        fim = np.zeros((3, 3), dtype=complex)
-        for u in range(self.U):
-            for v in range(self.V):
-                wavelength = c / (self.fc + v * 0)
-                ap = self.compute_steering_vector(theta, wavelength)
-                apb = self.compute_steering_vector(theta, wavelength)
-                dap = self.compute_steering_vector_derivative(theta)
-
-                alpha_v = self.compute_channel_gain(p, pb)
-
-                d_real = apb.T @ np.diag(phi) @ ap * self.compute_delay(tau, v, 0)
-                d_imag = 1j * d_real
-                d_theta = alpha_v * apb.T @ np.diag(phi) @ dap * self.compute_delay(tau, v, 0)
-
-                derivatives = np.array([d_real, d_imag, d_theta])
-                fim += 2 / self.N0 * np.real(np.outer(derivatives, derivatives.conj()))
-        return self.regularize_matrix(fim)
-
-    def safe_inverse(self, matrix):
-        """Compute inverse with fallback pseudo-inverse"""
+    def safe_inverse(self, matrix, eps=1e-12, rcond=1e-12):
+   
         try:
             return np.linalg.inv(matrix)
         except np.linalg.LinAlgError:
-            return np.linalg.pinv(matrix)
+          
+            reg = self.regularize(matrix, eps)
+            try:
+                return np.linalg.inv(reg)
+            except np.linalg.LinAlgError:
+                return np.linalg.pinv(matrix, rcond=rcond)
 
+    # FIM Computations
+
+    def compute_fim_mm(self, alpha, theta, tau, phi, delta_f=0.0):
+     
+        fim = np.zeros((3, 3), dtype=float)
+        a_theta = self.steering_vector(theta)
+        da_theta = self.steering_vector_derivative(theta)
+
+        for u in range(self.U):
+            for v in range(self.V):
+                delay = self.compute_delay(tau, v, delta_f)
+                signal = np.vdot(a_theta, phi * a_theta) * delay
+                signal_theta = alpha * np.vdot(a_theta, phi * da_theta) * delay
+
+                derivatives = np.array([signal, 1j * signal, signal_theta], dtype=complex)
+                fim += (2.0 / self.N0) * np.real(np.outer(derivatives, derivatives.conj()))
+
+        return self.regularize(fim)
+
+    def compute_fim_tm(self, alpha, theta, tau, phi, ue_pos, bs_pos, ris_pos=None, delta_f=0.0):
+     
+        fim = np.zeros((3, 3), dtype=float)
+
+        gain = np.sqrt(self.two_hop_channel_gain(ue_pos, bs_pos, ris_pos))
+        alpha_scaled = alpha * gain
+
+        a_theta = self.steering_vector(theta)
+        da_theta = self.steering_vector_derivative(theta)
+
+        for u in range(self.U):
+            for v in range(self.V):
+                delay = self.compute_delay(tau, v, delta_f)
+                signal = np.vdot(a_theta, phi * a_theta) * delay
+                signal_theta = alpha_scaled * np.vdot(a_theta, phi * da_theta) * delay
+
+                derivatives = np.array([signal, 1j * signal, signal_theta], dtype=complex)
+                fim += (2.0 / self.N0) * np.real(np.outer(derivatives, derivatives.conj()))
+
+        return self.regularize(fim)
+
+    # Error Bound Calculations
+    
     def compute_aeb(self, fim):
+        
         inv_fim = self.safe_inverse(fim)
         return np.sqrt(np.abs(np.real(inv_fim[2, 2])))
 
-    def compute_mcrlb(self, fim_mm, fim_tm, theta_true, theta_0):
-        inv_A = self.safe_inverse(fim_mm)
-        mcrlb_var = np.real(inv_A @ fim_tm @ inv_A)
-        bias = (theta_true - theta_0) ** 2
-        return np.sqrt(np.abs(mcrlb_var[2, 2]) + bias)
+    def compute_crlb_theta(self, fim):
+   
+        inv_fim = self.safe_inverse(fim)
+        return np.sqrt(np.abs(np.real(inv_fim[2, 2])))
+
+    def compute_mcrlb(self, fim_mm, fim_tm, theta_true, theta_est):
+     
+        inv_fim_mm = self.safe_inverse(fim_mm)
+        middle = inv_fim_mm @ fim_tm @ inv_fim_mm
+        variance_term = np.real(middle[2, 2])
+        bias_term = (theta_true - theta_est) ** 2
+        return np.sqrt(np.abs(variance_term) + bias_term)
