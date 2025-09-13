@@ -4,64 +4,77 @@ import seaborn as sns
 import plotly.graph_objects as go
 from .ris_localization import RISLocalization
 
-
 class RISLocalizationViz(RISLocalization):
-    def plot_results(self, theta_range, aeb_values, crlb_values, mcrlb_values):
-        plt.figure(figsize=(12, 6))
-        plt.plot(np.degrees(theta_range), aeb_values, label="AEB")
-        plt.plot(np.degrees(theta_range), crlb_values, label="CRLB")
-        plt.plot(np.degrees(theta_range), mcrlb_values, label="MCRLB")
+    def plot_error_bounds(self, theta_range, aeb_vals, crlb_vals, mcrlb_vals):
+        plt.figure(figsize=(10, 6))
+        plt.plot(np.degrees(theta_range), aeb_vals, label="AEB", marker="o", markersize=4)
+        plt.plot(np.degrees(theta_range), crlb_vals, label="CRLB", marker="x", markersize=4)
+        plt.plot(np.degrees(theta_range), mcrlb_vals, label="MCRLB", marker="s", markersize=4)
         plt.xlabel("Angle of Arrival (degrees)")
         plt.ylabel("Error Bound (radians)")
         plt.yscale("log")
-        plt.grid(True)
+        plt.grid(True, which="both", ls="--", alpha=0.6)
         plt.legend()
         plt.title("Localization Error Bounds vs. Angle of Arrival")
+        plt.tight_layout()
         plt.show()
 
     def plot_heatmap(self, theta_range, power_range, error_bounds):
-        plt.figure(figsize=(10, 8))
+        safe_vals = np.maximum(error_bounds, 1e-30)
+        log_vals = np.log10(safe_vals)
+
+        plt.figure(figsize=(10, 7))
         sns.heatmap(
-            np.log10(error_bounds),
-            xticklabels=np.round(np.degrees(theta_range[::5]), 1),
-            yticklabels=np.round(power_range[::5], 1),
+            log_vals,
+            xticklabels=np.round(np.degrees(theta_range[::max(1, len(theta_range)//10)]), 2),
+            yticklabels=np.round(power_range[::max(1, len(power_range)//10)], 1),
             cmap="viridis",
+            cbar_kws={"label": "log10(Error Bound)"},
         )
         plt.xlabel("Angle of Arrival (degrees)")
-        plt.ylabel("Transmission Power (dBm)")
+        plt.ylabel("Transmit Power (dBm)")
         plt.title("Error Bound Heatmap (log10 scale)")
+        plt.tight_layout()
         plt.show()
 
-    def plot_interactive_error_bounds(self, theta_range, aeb_values, crlb_values, mcrlb_values):
+    def plot_fim_heatmap(self, fim):
+        plt.figure(figsize=(6, 5))
+        sns.heatmap(np.abs(fim), annot=True, fmt=".2e", cmap="viridis", cbar_kws={"label": "abs(FIM)"})
+        plt.title("Fisher Information Matrix")
+        plt.xlabel("Parameter Index")
+        plt.ylabel("Parameter Index")
+        plt.tight_layout()
+        plt.show()
+
+    def plot_interactive_error_bounds(self, theta_range, aeb_vals, crlb_vals, mcrlb_vals):
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=np.degrees(theta_range), y=aeb_values, name="AEB", mode="lines+markers"))
-        fig.add_trace(go.Scatter(x=np.degrees(theta_range), y=crlb_values, name="CRLB", mode="lines+markers"))
-        fig.add_trace(go.Scatter(x=np.degrees(theta_range), y=mcrlb_values, name="MCRLB", mode="lines+markers"))
+        fig.add_trace(go.Scatter(x=np.degrees(theta_range), y=aeb_vals, name="AEB", mode="lines+markers"))
+        fig.add_trace(go.Scatter(x=np.degrees(theta_range), y=crlb_vals, name="CRLB", mode="lines+markers"))
+        fig.add_trace(go.Scatter(x=np.degrees(theta_range), y=mcrlb_vals, name="MCRLB", mode="lines+markers"))
 
         fig.update_layout(
-            title="Localization Error Bounds vs. Angle of Arrival (Interactive)",
+            title="Interactive Localization Error Bounds",
             xaxis_title="Angle of Arrival (degrees)",
             yaxis_title="Error Bound (radians)",
             yaxis_type="log",
             hovermode="x unified",
+            width=900,
+            height=500,
         )
         fig.show()
 
     def plot_interactive_heatmap(self, theta_range, power_range, error_bounds):
-        fig = go.Figure(data=go.Heatmap(
-            z=np.log10(error_bounds),
-            x=np.degrees(theta_range),
-            y=power_range,
-            colorscale="Viridis",
-            hovertemplate="Angle: %{x:.1f}°<br>Power: %{y:.1f} dBm<br>Error (log10): %{z:.2f}<extra></extra>",
-        ))
-        fig.update_layout(title="Error Bound Heatmap (Interactive)")
-        fig.show()
+        safe_vals = np.maximum(error_bounds, 1e-30)
+        log_vals = np.log10(safe_vals)
 
-    def plot_fim_heatmap(self, fim):
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(np.abs(fim), annot=True, fmt=".2e", cmap="viridis")
-        plt.title("Fisher Information Matrix (Magnitude)")
-        plt.xlabel("Parameter Index")
-        plt.ylabel("Parameter Index")
-        plt.show()
+        fig = go.Figure(
+            data=go.Heatmap(
+                z=log_vals,
+                x=np.degrees(theta_range),
+                y=power_range,
+                colorscale="Viridis",
+                hovertemplate="Angle: %{x:.1f}°<br>Power: %{y:.1f} dBm<br>log10(Error): %{z:.3f}<extra></extra>",
+            )
+        )
+        fig.update_layout(title="Interactive Error Bound Heatmap", xaxis_title="Angle (degrees)", yaxis_title="Power (dBm)")
+        fig.show()
